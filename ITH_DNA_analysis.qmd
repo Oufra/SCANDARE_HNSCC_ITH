@@ -1,0 +1,288 @@
+---
+title: "SCANDARE-ORL: ITH results analysis"
+author: "Abderaouf Hamza"
+format: html
+---
+
+<!--
+================================================================================
+ Script  : ITH_DNA_analysis.qmd
+ Project : SCANDARE-ORL (HNSCC intra-tumour heterogeneity study)
+ Purpose : Aggregate the per-sample subclonal-structure outputs of the four
+           clonal-deconvolution tools plus the WeMe consensus, compute a
+           Shannon-index ITH score per sample and per tool, and compare
+           scores and inferred number of clones across tools.
+ Inputs  : - Sample list TSV (one row per region).
+           - Per-tool result directories under `ith_results_path`
+             (see 03_0_preprocess_results_for_WeMe.R for layout).
+           - WeMe consensus output sub-directory under the same root.
+ Outputs : - TSV with one row per region containing the Shannon ITH score
+             and inferred number of clones for each tool + the consensus.
+ Method  : For each tool, the ITH score is the Shannon entropy
+                H = -sum(p_i * log(p_i))
+           where p_i is the CCF of cluster i (interpreted as a proportion).
+           NOTE: this is not strictly a Shannon diversity in the ecological
+           sense (the CCFs do not sum to 1) — it is used here as a relative
+           score for cross-tool comparison, consistent with the manuscript.
+================================================================================
+-->
+
+```{r setup}
+library(tidyverse)
+library(ggpubr)
+library(corrplot)
+```
+
+# Configuration
+
+```{r config}
+# --- CONFIG -------------------------------------------------------------------
+SCANDARE_sample_list_path <- "<path/to/SCANDARE_CONIPHER_samples.tsv>"
+ith_results_path          <- "<path/to/results/ith_dna/>"
+output_tsv_path           <- "<path/to/results/ith_dna/SCANDAREORL_ith_scores.tsv>"
+# ------------------------------------------------------------------------------
+```
+
+# Data
+
+```{r import-data}
+SCANDARE_sample_list.tsv <- read_tsv(SCANDARE_sample_list_path)
+
+# CONIPHER requires patient IDs to share a common string prefix (SCDR)
+# followed by a number.
+SCANDARE_sample_list <-
+  SCANDARE_sample_list.tsv %>%
+  separate_rows(Barcode_DRAGON, sep = "/") %>%
+  mutate(
+    id_run_DRAGON = str_extract(Barcode_DRAGON, "D[:digit:]{3}"),
+    CASE_ID       = str_c("SCDR", str_remove(ID_SCANDARE, "-"))
+  ) %>%
+  group_by(CASE_ID) %>%
+  mutate(SAMPLE = str_c(CASE_ID, "_", row_number())) %>%
+  ungroup()
+
+
+## CloneSig
+Clonesig_results <-
+  SCANDARE_sample_list %>%
+  select("sample" = Barcode_DRAGON) %>%
+  mutate(clonesig_results = map(sample, \(x) tryCatch(
+    error = function(e) NA,
+    read_tsv(
+      str_c(ith_results_path, "clonesig/", x, "_clonesig_out.tsv"),
+      col_select = c("clone", "clone_ccf")
+    ) %>%
+      group_by(clone) %>%
+      mutate(n_ssms = n(), clone = clone + 1) %>%
+      distinct() %>%
+      rename("cluster" = clone, "proportion" = clone_ccf)
+  )))
+
+## DPClust
+DPClust_results <-
+  SCANDARE_sample_list %>%
+  select("sample" = Barcode_DRAGON) %>%
+  mutate(dpclust_results = map(sample, \(x) tryCatch(
+    error = function(e) NA,
+    read_tsv(
+      str_c(
+        ith_results_path, "dpclust/", "/", x, "/",
+        x, "_DPoutput_2000iters_1000burnin_seed123/",
+        x, "_2000iters_1000burnin_bestClusterInfo.txt"
+      )
+    ) %>%
+      rename(
+        "cluster"    = cluster.no,
+        "proportion" = location,
+        "n_ssms"     = no.of.mutations
+      ) %>%
+      mutate(proportion = ifelse(proportion > 1, 1, proportion)) %>%
+      group_by(proportion) %>%
+      summarise(n_ssms = sum(n_ssms, na.rm = TRUE)) %>%
+      arrange(desc(proportion)) %>%
+      mutate(cluster = row_number()) %>%
+      select(cluster, n_ssms, proportion)
+  )))
+
+## PhylogicNDT
+PhylogicNTD_results <-
+  SCANDARE_sample_list %>%
+  select("sample" = Barcode_DRAGON) %>%
+  mutate(phylogicndt_results = map(sample, \(x) tryCatch(
+    error = function(e) NA,
+    read_tsv(
+      str_c(ith_results_path, "phylogicndt/", "/", x, "/",
+            x, ".mut_ccfs.txt"),
+      col_select = c("Cluster_Assignment", "clust_ccf_mean")
+    ) %>%
+      group_by(Cluster_Assignment) %>%
+      mutate(n_ssms = n()) %>%
+      distinct() %>%
+      rename("cluster"    = Cluster_Assignment,
+             "proportion" = clust_ccf_mean)
+  )))
+
+## PyClone-VI
+Pyclonebeta_results <-
+  SCANDARE_sample_list %>%
+  select("sample" = Barcode_DRAGON) %>%
+  mutate(pyclone_results = map(sample, \(x) tryCatch(
+    error = function(e) NA,
+    read_tsv(
+      str_c(ith_results_path, "pyclone_vi/", x,
+            "_pyclonevi.tsv_output.tsv"),
+      col_select = c("cluster_id", "cellular_prevalence")
+    ) %>%
+      group_by(cluster_id) %>%
+      mutate(n_ssms = n()) %>%
+      distinct() %>%
+      rename("cluster"    = cluster_id,
+             "proportion" = cellular_prevalence) %>%
+      mutate(cluster = cluster + 1)
+  )))
+
+## WeMe consensus
+WeMe_results <-
+  SCANDARE_sample_list %>%
+  select("sample" = Barcode_DRAGON) %>%
+  mutate(weme_results = map(sample, \(x) tryCatch(
+    error = function(e) NA,
+    read_tsv(
+      str_c(ith_results_path, "weme/", x, "/",
+            x, "_subclonal_structure.txt"),
+      col_select = c("cluster", "proportion")
+    ) %>%
+      group_by(cluster) %>%
+      mutate(n_ssms = n()) %>%
+      distinct()
+  )))
+```
+
+# Compute Shannon ITH score per tool
+
+```{r ith-scores}
+clonesig_ith <-
+  Clonesig_results %>%
+  filter(!is.na(clonesig_results)) %>%
+  unnest(clonesig_results) %>%
+  select(sample, cluster, proportion) %>%
+  distinct() %>%
+  group_by(sample) %>%
+  summarise(
+    clonesig_ith_score = -sum(proportion * log(proportion)),
+    clonesig_n_clones  = n()
+  )
+
+pyclone_ith <-
+  Pyclonebeta_results %>%
+  filter(!is.na(pyclone_results)) %>%
+  unnest(pyclone_results) %>%
+  select(sample, cluster, proportion) %>%
+  distinct() %>%
+  group_by(sample) %>%
+  summarise(
+    pyclone_ith_score = -sum(proportion * log(proportion)),
+    pyclone_n_clones  = n()
+  )
+
+dpclust_ith <-
+  DPClust_results %>%
+  filter(!is.na(dpclust_results)) %>%
+  unnest(dpclust_results) %>%
+  select(sample, cluster, proportion) %>%
+  distinct() %>%
+  group_by(sample) %>%
+  summarise(
+    dpclust_ith_score = -sum(proportion * log(proportion)),
+    dpclust_n_clones  = n()
+  )
+
+phylogicndt_ith <-
+  PhylogicNTD_results %>%
+  filter(!is.na(phylogicndt_results)) %>%
+  unnest(phylogicndt_results) %>%
+  select(sample, cluster, proportion) %>%
+  distinct() %>%
+  group_by(sample) %>%
+  summarise(
+    phylogicndt_ith_score = -sum(proportion * log(proportion)),
+    phylogicndt_n_clones  = n()
+  )
+
+weme_ith <-
+  WeMe_results %>%
+  filter(!is.na(weme_results)) %>%
+  unnest(weme_results) %>%
+  select(sample, cluster, proportion) %>%
+  distinct() %>%
+  group_by(sample) %>%
+  summarise(
+    weme_ith_score = -sum(proportion * log(proportion)),
+    weme_n_clones  = n()
+  )
+
+ith_scores <-
+  SCANDARE_sample_list %>%
+  rename("sample" = Barcode_DRAGON) %>%
+  left_join(clonesig_ith) %>%
+  left_join(pyclone_ith) %>%
+  left_join(dpclust_ith) %>%
+  left_join(phylogicndt_ith) %>%
+  left_join(weme_ith) %>%
+  select(-c(id_run_DRAGON, CASE_ID, SAMPLE))
+```
+
+# Diagnostic plots
+
+```{r plots}
+ith_scores_distribution_histogram <-
+  ith_scores %>%
+  pivot_longer(matches("ith"),
+               names_to  = "method",
+               values_to = "ith_score") %>%
+  ggplot(aes(x = ith_score)) +
+  geom_histogram() +
+  facet_wrap(~method) +
+  theme_bw()
+ith_scores_distribution_histogram
+
+ith_scores_distribution_correlation <-
+  ggscatter(
+    ith_scores,
+    x        = "clonesig_ith_score",
+    y        = "pyclone_ith_score",
+    add      = "reg.line",
+    conf.int = TRUE,
+    add.params = list(color = "blue", fill = "lightgray")
+  ) +
+  stat_cor(method = "pearson")
+ith_scores_distribution_correlation
+
+n_clones_comparison <-
+  ith_scores %>%
+  group_by(clonesig_n_clones, pyclone_n_clones) %>%
+  tally() %>%
+  ggplot(aes(x = clonesig_n_clones, y = pyclone_n_clones, size = n)) +
+  geom_point() +
+  theme_bw()
+n_clones_comparison
+
+ith_scores %>%
+  select(matches("ith_score")) %>%
+  cor(use = "complete.obs") %>%
+  corrplot()
+
+ith_scores %>%
+  select(matches("n_clones")) %>%
+  cor(use = "complete.obs") %>%
+  corrplot()
+```
+
+# Write output
+
+```{r write-output}
+ith_scores %>%
+  filter(!is.na(clonesig_ith_score)) %>%
+  rename("Barcode_DRAGON" = sample) %>%
+  write_tsv(output_tsv_path)
+```

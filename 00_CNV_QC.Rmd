@@ -1,0 +1,182 @@
+---
+title: "SCANDARE-ORL : CNV QC"
+author: "Abderaouf Hamza"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    theme: united
+    toc_float:
+      collapsed: false
+editor_options:
+  chunk_output_type: inline
+---
+
+<!--
+================================================================================
+ Script  : 00_CNV_QC.Rmd
+ Project : SCANDARE-ORL (HNSCC intra-tumour heterogeneity study)
+ Purpose : Quality control of FACETS copy-number calls produced by the DRAGON
+           pipeline, and computation of NRPCC (number of reads per chromosome
+           copy) as defined in Dentro et al.
+ Inputs  : - Sample list (TSV) with one row per region: ID_SCANDARE,
+             Barcode_DRAGON, ...
+           - Per-run DRAGON output directories containing FACETS
+             `cnv_report.table2.tsv` and `mapping.stats.xlsx` files.
+ Outputs : - TSV table with one row per region containing:
+             homdel_frac, n_seg, purity, ploidy, mean_cov_x, nrpcc, and
+             pass/fail QC flags.
+ Method  : Adapted from the facets-preview / facets-qc QC criteria
+           (https://github.com/taylor-lab/facets-preview). Several QC checks
+           had to be omitted because the DRAGON FACETS output does not
+           expose `mafR` (minor-allele log-odds ratio) nor `cf.em`
+           (EM cell fraction).
+ Usage   : Knit interactively from RStudio after editing the CONFIG block.
+================================================================================
+-->
+
+```{r setup}
+knitr::opts_chunk$set(
+  echo    = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  cache   = FALSE
+)
+
+library(DT)
+library(janitor)
+library(kableExtra)
+library(vroom)
+library(readxl)
+library(tidyverse)
+```
+
+# Configuration
+
+Edit these paths before running.
+
+```{r config}
+# --- CONFIG -------------------------------------------------------------------
+# Sample list (TSV) with one row per sequenced region.
+sample_list_path <- "<path/to/SCANDARE_ORL_sample_list.tsv>"
+
+# Root directory containing per-run DRAGON output folders.
+dragon_data_dir  <- "<path/to/dragon_runs>"
+
+# Output TSV (QC table with one row per region).
+output_qc_path   <- "<path/to/results/seq_cnv_qc_SCANDARE.tsv>"
+# ------------------------------------------------------------------------------
+```
+
+# Objectives
+
+QC of FACETS CNV calls. QC criteria are inspired from the
+[facets-preview](https://bandla-chai.gitbook.io/facets-preview/reviewing-fits)
+module
+[facets-qc](https://github.com/taylor-lab/facets-preview/blob/master/facets_qc/v1.0/facets_fit_qc.R).
+NRPCC is computed as in Dentro et al.
+
+# Method
+
+```{r function}
+# generate_facet_qc() ----------------------------------------------------------
+# Compute per-sample QC metrics from a FACETS segmentation table.
+# A simplified version of facets-qc: the DRAGON FACETS output lacks
+# `mafR` and `cf.em` so the corresponding checks are omitted.
+generate_facet_qc <- function(cnv_table) {
+
+  total_genome_size <- sum(cnv_table$Stop - cnv_table$Start)
+  ploidy <- unique(cnv_table$Ploidy)
+  purity <- unique(cnv_table$Cellularity)[1]
+  n_seg  <- nrow(cnv_table)
+
+  homdel_table <- cnv_table[cnv_table$Copy == 0, ]
+  homdel_frac  <- sum(homdel_table$Stop - homdel_table$Start, na.rm = TRUE) /
+                  total_genome_size
+
+  tibble(
+    homdel_frac = homdel_frac,
+    n_seg       = n_seg,
+    purity      = purity,
+    ploidy      = ploidy
+  )
+}
+```
+
+# Data
+
+Segmentation files from FACETS (DRAGON pipeline output).
+
+```{r data-import}
+SCANDARE_sample_list.tsv <-
+  read_tsv(sample_list_path)
+
+SCANDARE_sample_list <-
+  SCANDARE_sample_list.tsv %>%
+  mutate(
+    # Some samples have two DRAGON barcodes corresponding to two runs (re-run
+    # after a first failure). The most recent is the second one and is kept.
+    Barcode_DRAGON = map(Barcode_DRAGON, ~ str_split(.x, "/")[[1]][1]),
+    Run_Barcode    = str_extract(Barcode_DRAGON, "D[:digit:]{3}")
+  )
+
+concat_cnv_table <-
+  tibble(
+    cnv_reports_paths = list.files(
+      dragon_data_dir,
+      pattern    = "cnv_report.table2.tsv",
+      recursive  = TRUE,
+      full.names = TRUE
+    ),
+    Run_Barcode = str_extract(cnv_reports_paths, "D[:digit:]{3}")
+  ) %>%
+  right_join(SCANDARE_sample_list) %>%
+  mutate(cnv_report = map2(cnv_reports_paths, Barcode_DRAGON, ~ {
+    read_tsv(.x) %>%
+      filter(Barcode == .y)
+  })) %>%
+  unnest(cnv_report)
+
+concat_qc_table <-
+  tibble(
+    qc_mapping_paths = list.files(
+      dragon_data_dir,
+      pattern    = "mapping.stats.xlsx",
+      recursive  = TRUE,
+      full.names = TRUE
+    ),
+    qc_mapping_file = map(qc_mapping_paths,
+                          ~ clean_names(read_xlsx(.x, col_types = "text")))
+  ) %>%
+  unnest(qc_mapping_file) %>%
+  type_convert()
+```
+
+# Generate per-sample QC
+
+```{r generate-qc}
+facet_qcs_SCANDARE <-
+  concat_cnv_table %>%
+  group_by(Barcode) %>%
+  nest() %>%
+  transmute(facet_qcs = map(data, ~ generate_facet_qc(.x))) %>%
+  unnest(facet_qcs) %>%
+  left_join(select(concat_qc_table, "Barcode" = "barcode", mean_cov_x)) %>%
+  rowwise() %>%
+  mutate(
+    # NRPCC: number of reads per chromosome copy (Dentro et al., 2021).
+    nrpcc              = mean_cov_x * purity / (purity * ploidy + (1 - purity) * 2),
+    # purity == 0.3 is FACETS's default fallback when the fit fails.
+    filter_purity      = !is.na(purity) & purity != 0.3,
+    filter_homdel_frac = homdel_frac <= 0.05
+  )
+```
+
+# Write output
+
+```{r write-out}
+write_tsv(facet_qcs_SCANDARE, output_qc_path)
+```
