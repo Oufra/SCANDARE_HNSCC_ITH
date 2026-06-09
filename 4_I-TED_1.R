@@ -2,9 +2,9 @@
 # Script  : 4_I-TED_1.R
 # Project : SCANDARE-ORL (HNSCC intra-tumour heterogeneity study)
 # Purpose : Compute the intratumour expression distance (I-TED) metric
-#           (Biswas et al., Nature 2023) on the multi-region bulk RNA-seq
-#           cohort. Standard ITH measures are sensitive to the number of
-#           regions sampled per tumour; the pairwise correlation distance
+#           (Martínez-Ruiz et al., Nature 2023) on the multi-region bulk
+#           RNA-seq cohort. Standard ITH measures are sensitive to the number
+#           of regions sampled per tumour; the pairwise correlation distance
 #           used here yields a per-tumour estimate (median of pairwise
 #           distances) that is independent of the number of regions sampled.
 #
@@ -240,7 +240,7 @@ I.TED.patients <- distance_long %>%
 # Cohort-level position and dispersion of the median I-TED.
 I.TED.patients %>% get_summary_stats(I.TEDmedian)
 
-# Fig. 1b style plot (cf. Biswas et al., Nature 2023).
+# Fig. 1b style plot (cf. Martínez-Ruiz et al., Nature 2023).
 ggplot(distance_long) +
   geom_point(aes(x = fct_reorder(patient, I.TEDmax, .desc = TRUE),
                  y = distance),

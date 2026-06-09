@@ -12,7 +12,7 @@ The scripts cover:
   (CloneSig [1], PyClone-VI [2], PhylogicNDT [3], DPClust [4]), consensus
   reconciliation with WeMe [5], and per-sample Shannon-index scoring.
 - **Transcriptional ITH (tITH)** — pairwise distance-correlation between
-  regions of the same tumour (I-TED metric).
+  regions of the same tumour (I-TED metric [6]).
 
 ## Repository layout
 
@@ -192,6 +192,8 @@ The tools applied by this pipeline are described in the following publications. 
 4. **DPClust** — Nik-Zainal, S. *et al.* The life history of 21 breast cancers. *Cell* **149**, 994–1007 (2012). <https://doi.org/10.1016/j.cell.2012.04.023>
 
 5. **WeMe consensus** — Dentro, S. C. *et al.* Characterizing genetic intra-tumor heterogeneity across 2,658 human cancer genomes. *Cell* **184**, 2239–2254.e39 (2021). <https://doi.org/10.1016/j.cell.2021.03.009>
+
+6. **I-TED metric** — Martínez-Ruiz, C. *et al.* Genomic–transcriptomic evolution in lung cancer and metastasis. *Nature* **616**, 543–552 (2023). <https://doi.org/10.1038/s41586-023-05706-4>
 
 ## Contact
 
