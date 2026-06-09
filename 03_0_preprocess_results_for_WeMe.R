@@ -3,8 +3,8 @@
 # Project : SCANDARE-ORL (HNSCC intra-tumour heterogeneity study)
 # Purpose : Harmonise the outputs of the four clonal-deconvolution tools
 #           (DPClust, PhylogicNDT, PyClone-VI, CloneSig) into the per-tool
-#           subclonal-structure tables expected by WeMe (Salcedo et al.,
-#           Nat Biotechnol 2020), and write them into the directory layout
+#           subclonal-structure tables expected by WeMe (Dentro et al.,
+#           Cell 2021), and write them into the directory layout
 #           that WeMe requires.
 # Inputs  : - DPClust master TSV (gives the canonical sample list).
 #           - Per-tool result directories under `ith_results_path`:

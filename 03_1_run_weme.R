@@ -1,8 +1,8 @@
 # =============================================================================
 # Script  : 03_1_run_weme.R
 # Project : SCANDARE-ORL (HNSCC intra-tumour heterogeneity study)
-# Purpose : Run the WeMe consensus algorithm (Salcedo et al., Nat Biotechnol
-#           2020) on the per-tool subclonal-structure files prepared by
+# Purpose : Run the WeMe consensus algorithm (Dentro et al., Cell 2021)
+#           on the per-tool subclonal-structure files prepared by
 #           03_0_preprocess_results_for_WeMe.R.
 # Inputs  : Per-sample, per-method `_subclonal_structure.txt` files arranged
 #           in the directory layout that WeMe expects:

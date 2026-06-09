@@ -2,7 +2,7 @@
 # =============================================================================
 # Script  : 02_3_run_pyclone-vi.sh
 # Project : SCANDARE-ORL (HNSCC intra-tumour heterogeneity study)
-# Purpose : Fit PyClone-VI (Gillis & Roth, Nat Methods 2020) on one
+# Purpose : Fit PyClone-VI (Gillis & Roth, BMC Bioinformatics 2020) on one
 #           pre-processed per-sample variant table and write the per-mutation
 #           cluster assignments.
 # Inputs  : -i  Pre-processed PyClone-VI input TSV produced by
